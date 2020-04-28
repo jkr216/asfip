@@ -1,0 +1,462 @@
+---
+title: "Reproducible Finance with R"
+author: "jonathan.regenstein@rstudio.com"
+output:
+  html_document:
+    df_print: paged
+  pdf_document: default
+  html_notebook: default
+---
+
+
+```{r, warning=FALSE, message=FALSE}
+knitr::opts_chunk$set(message = FALSE, warning = FALSE, comment = NA)
+install.packages("tidyverse")
+install.packages("tidyquant")
+install.packages("timetk")
+install.packages("tibbletime")
+install.packages("broom")
+install.packages("dygraphs")
+
+devtools::install_github("jbkunst/highcharter")
+```
+
+
+```{r}
+library(tidyverse)
+library(tidyquant)
+library(tibbletime)
+library(timetk)
+library(dygraphs)
+library(highcharter)
+library(broom)
+```
+
+### Introducing R
+
+    + Statistical programming language -> by data scientists, for data scientists
+    + Base R + 17,000 packages
+    + RStudio
+    + Shiny
+    + sparklyr
+    + tensorflow
+    + Rmarkdown
+    + database connectors
+    + htmlwidgets
+  
+
+
+### Packages for finance
+
+
+```{r, eval = FALSE}
+library(PerformanceAnalytics)
+library(PortfolioAnalytics)
+library(TTR)
+library(tidyquant)
+library(quantmod)
+library(xts)
+```
+
+
+List of packages for finance here:
+https://cran.r-project.org/web/views/Finance.html
+
+### Packages for data visualization
+
+
+```{r, eval = FALSE}
+library(ggplot2)
+library(dygraphs)
+library(highcharter)
+library(shiny)
+```
+
+
+### An example project
+
+- Import data for 5 ETFs
+- Visualize prices and returns
+- Calculate some stats of interest
+- Create an SMA 50 v. SMA 200
+- Run a rolling linear model, chart some results
+
+    + SPY (S&P500 fund)
+    + EFA (a non-US equities fund) 
+    + IJS (a small-cap value fund) 
+    + EEM (an emerging-mkts fund)
+    + AGG (a bond fund)
+
+### Import the Data
+
+
+    + from excel using `read_excel`
+    
+    + from csv using `read_csv`
+   
+    + from Yahoo! Finance using `getSymbols` or `tq_get`
+ 
+    + from myssql, postgres etc using `dbConnect`
+
+    + via API with `httr` and `jsonlite` (important for Alternative Data)
+  
+ 
+### Get data
+
+```{r}
+
+# The symbols vector holds our tickers. 
+symbols <- c("SPY",
+             "EFA", 
+             "IJS", 
+             "EEM",
+             "AGG")
+
+# data imported from Yahoo! Finance
+etf_prices<-
+  tq_get(symbols, from  = "2012-12-31") %>% 
+  select(symbol, date, adjusted) %>% 
+  spread(symbol, adjusted) %>% 
+  tk_xts(date_var = date)
+```
+
+### Inspect the data
+
+
+```{r}
+head(etf_prices)
+```
+
+### Visualize
+
+```{r}
+dygraph(etf_prices)
+```
+
+### Another Visualization
+
+```{r}
+highchart(type = "stock") %>% 
+  hc_add_series(etf_prices[,1]) %>% 
+  hc_add_series(etf_prices[,2]) %>% 
+  hc_add_series(etf_prices[,3]) %>% 
+  hc_add_series(etf_prices[,4]) %>% 
+  hc_add_series(etf_prices[,5]) %>% 
+  hc_title(text = "Highcharting 5 ETFS") %>%
+  hc_yAxis(opposite = FALSE,
+           labels = list(format = "${value}")) %>% 
+  hc_legend(enabled = TRUE) %>% 
+  hc_navigator(enabled = FALSE) %>% 
+  hc_exporting(enabled = TRUE)
+```
+
+
+### Performance Analytics: getting started
+
+
+```{r}
+etf_returns <- 
+  Return.calculate(etf_prices, method = "log")
+
+head(etf_returns)
+```
+
+
+```{r}
+table.Stats(etf_returns)
+```
+
+
+```{r}
+table.CAPM(etf_returns, etf_returns$SPY)
+```
+
+### Scatter returns
+
+```{r}
+etf_returns %>% 
+  tk_tbl(rename_index = "date") %>% 
+  select(-date) %>% 
+  gather(symbol, return, -SPY) %>% 
+  ggplot(aes(x = SPY, y = return, color = symbol)) +
+  geom_point(alpha = .5) +
+  facet_wrap(~symbol)
+
+```
+
+### Add regression line
+
+```{r}
+etf_returns %>% 
+  tk_tbl(rename_index = "date") %>% 
+  dplyr::select(-date) %>% 
+  gather(symbol, return, -SPY) %>% 
+  ggplot(aes(x = SPY, y = return, color = symbol)) +
+  geom_point(alpha = .5) + 
+  geom_smooth(formula = y ~ x, se = TRUE) +
+  facet_wrap(~symbol)
+```
+
+
+### Interactive Scatter
+
+```{r}
+etf_returns %>% 
+  tk_tbl(rename_index = "date") %>% 
+  hchart(., type = "scatter", hcaes(x = SPY, y = EEM, date = date)) %>% 
+  hc_xAxis(title = list(text = "Market Returns"),
+           labels = list(format = "{value}%")) %>% 
+  hc_yAxis(title = list(text = "EEM Returns"),
+           labels = list(format = "{value}%")) %>% 
+  hc_title(text = "Emerging Market v. SPY") %>% 
+  hc_tooltip(pointFormat = "date: {point.date} <br> 
+             EEM return: {point.y:.4f}  <br> 
+             mkt return: {point.x:.4f}")
+```
+
+
+Grab beta or slope of regression line.
+
+```{r}
+slope <- table.CAPM(etf_returns, etf_returns$SPY)[2, 2]
+```
+
+Add the regression line to the original scatter
+
+```{r}
+
+etf_returns_tibble <- 
+  etf_returns %>% 
+  tk_tbl(rename_index = "date")
+
+  hchart(etf_returns_tibble, type = "scatter", 
+         hcaes(x = SPY, y = EEM, date = date)) %>%
+  hc_add_series(etf_returns_tibble, "line", 
+                hcaes(x = SPY, 
+                      y = SPY * slope)) %>% 
+  hc_xAxis(title = list(text = "Market Returns"),
+           labels = list(format = "{value}%")) %>% 
+  hc_yAxis(title = list(text = "EEM Returns"),
+           labels = list(format = "{value}%")) %>% 
+  hc_title(text = "Scatter with Beta Line")
+```
+
+### Other Nice Functions (too many to list)
+
+```{r}
+table.DownsideRisk(etf_returns, Rf= .0003)
+```
+
+```{r}
+table.Drawdowns(etf_returns$EEM)
+```
+
+```{r}
+SharpeRatio(etf_returns, Rf = .0003)
+```
+
+```{r}
+InformationRatio(etf_returns, etf_returns$SPY)
+```
+
+```{r}
+SemiDeviation(etf_returns)
+```
+
+
+### Standard Deviation of each asset
+
+```{r}
+StdDev(na.omit(etf_returns))
+```
+
+### Portfolio Standard Deviation
+
+```{r}
+StdDev(na.omit(etf_returns), 
+       weights = c(.1, .2, .2, .2, .3))
+```
+
+
+### Contribution to Portfolio Standard Deviation  
+
+```{r}
+StdDev(na.omit(etf_returns), 
+       weights = c(.1, .2, .2, .2, .3), 
+       portfolio_method = "component")
+```
+
+### Visualize Contribution
+
+```{r}
+StdDev(na.omit(etf_returns), 
+       weights = c(.1, .2, .2, .2, .3), 
+       portfolio_method = "component") %>% 
+  as.tibble() %>% 
+  add_column(symbols = sort(symbols)) %>% 
+  ggplot(aes(x = symbols, y = pct_contrib_StdDev, fill = symbols)) +
+  geom_col(width = .5) +
+  labs(y = "percent contribution to vol", x = "", title = "Asset Contribution to Vol") +
+  scale_y_continuous(labels = scales::percent)
+```
+
+
+### Rolling Mean Calculations and Visualization: our own functions
+
+```{r}
+sma_50 <- rollify(mean, window = 50)
+sma_200 <- rollify(mean, window = 200)
+sd_50 <- rollify(sd, window = 50)
+sd_200 <- rollify(sd, window = 200)
+ 
+etf_rolling_calculations <-  
+  etf_prices %>% 
+  tk_tbl(rename_index = "date") %>% 
+  select(date, SPY) %>% 
+  mutate(sma50 = sma_50(SPY),
+         sma200 = sma_200(SPY),
+         sd200_lower = sma200 - sd_200(SPY),
+         sd200_upper = sma200 + sd_200(SPY),
+         signal = ifelse(sma50 > sma200, 1, 0)
+         ) %>%
+  select(-SPY) %>% 
+  na.omit()
+```
+
+```{r}
+highchart()%>%
+  hc_add_series(etf_rolling_calculations, type = "line", 
+                hcaes(x = date, y = sma200), 
+                name = "sma200"
+                ) %>%
+ hc_add_series(etf_rolling_calculations, type = "line", 
+                hcaes(x = date, y = sma50), 
+                name = "sma50",
+               color = "green") %>%
+  hc_add_series(etf_rolling_calculations, 
+                type = "arearange", 
+                hcaes(x = date, 
+                      low = sd200_lower, 
+                      high = sd200_upper),
+                color = "pink",
+                alpha = .25,
+                fillOpacity = 0.3,
+                showInLegend = FALSE
+                ) %>%
+  hc_title(text = "SMA 50 v. SMA 200") %>% 
+      hc_xAxis(type = 'datetime') %>% 
+  hc_navigator(enabled = FALSE) %>% 
+  hc_scrollbar(enabled = FALSE) %>% 
+  hc_legend(enabled = TRUE) %>% 
+  hc_exporting(enabled = TRUE) 
+```
+
+### Calculate growth of dollar
+
+SMA trend strategy versus buy and hold
+
+```{r}
+etf_trend <- 
+  etf_prices %>% 
+  tk_tbl(rename_index = "date") %>% 
+  select(date, SPY) %>% 
+  mutate(sma50 = sma_50(SPY),
+         sma200 = sma_200(SPY),
+         returns = log(SPY) - log(lag(SPY)),
+         signal = ifelse(sma50 > sma200, 1, 0),
+         daily_treas = (1 + (2/100)) ^ (1/252) - 1,
+         buy_hold_returns = (.9 * returns) + (.1 * daily_treas),
+         trend_returns = if_else(lag(signal) == 1, (signal * returns), daily_treas)
+         ) %>%
+  na.omit() %>% 
+  mutate(
+         trend_growth = accumulate(1 + trend_returns, `*`),
+         buy_hold_growth = accumulate(1 + buy_hold_returns, `*`)) %>%
+  select(date, trend_growth, buy_hold_growth) %>% 
+  tk_xts(date_var = date) 
+```
+
+### Visualize Strategy versus Buy and Hold
+
+```{r}
+
+  
+  highchart(type = "stock") %>% 
+  hc_title(text = "Growth") %>%
+  hc_add_series(etf_trend$trend_growth, color = "cornflowerblue",  name = "trend") %>%
+  hc_add_series(etf_trend$buy_hold_growth, color = "green", name = "buy_hold") %>%
+  hc_add_theme(hc_theme_flat()) %>%
+  hc_navigator(enabled = FALSE) %>% 
+  hc_scrollbar(enabled = FALSE) %>% 
+  hc_legend(enabled = TRUE)
+```
+
+### Rolling Models
+
+```{r}
+
+rolling_lm <- rollify(.f = function(EEM, SPY) {
+                              lm(EEM ~ SPY)
+                           }, 
+                      window = 100, 
+                      unlist = FALSE)
+
+etf_returns_tibble %>%
+  select(date, EEM, SPY) %>%
+  na.omit() %>% 
+  mutate(rolling_beta = rolling_lm(EEM, SPY)) %>% 
+  slice(-1:-99) %>% 
+  mutate(glanced = map(rolling_beta, 
+                      glance)) %>% 
+  unnest(glanced)
+
+```
+
+```{r}
+rolling_model_results <- 
+  etf_returns_tibble %>%
+  select(date, EEM, SPY) %>%
+  na.omit() %>% 
+  mutate(rolling_beta = rolling_lm(EEM, SPY)) %>% 
+  slice(-1:-99) %>% 
+  mutate(glanced = map(rolling_beta, 
+                      glance)) %>% 
+  unnest(glanced) %>% 
+  select(date, r.squared, adj.r.squared, p.value)
+
+rolling_model_results %>% 
+  hchart(., hcaes(x = date, y = r.squared), type = "line")  %>% 
+  hc_title(text = "Rolling R-Squared")
+  
+```
+
+
+### Other Packages of Interest
+
+```{r, eval = FALSE}
+library(forecast) # Good out of the box forecasting tools. Useful for macro trends.
+library(h2o) # machine learning libraries
+library(keras) # deep learning tensorflow.rstudio.com
+library(lime) # for ML white-boxing
+library(ranger) # random forest
+library(recipes) # for ML preprocessing
+library(rsample) # for resampling
+library(caret) # classification and regression
+library(tidytext) # parse text and mining
+library(tidyposterior) # posthoc after resampling
+```
+
+### Learn more
+www.reproduciblefinance.com
+
+http://r4ds.had.co.nz/
+
+### Get Started
+
+- Download R: https://cloud.r-project.org/
+
+- Download RStudio: www.rstudio.com/products/rstudio/download/#download
+
+- datacamp course: www.datacamp.com/tracks/applied-finance-with-r
+
+
